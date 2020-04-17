@@ -42,6 +42,23 @@ drake_lcm_cc_library(
 )
 
 drake_lcm_cc_library(
+    name = "quiver_plot",
+    lcm_package = "drake",
+    lcm_srcs = [
+        "lcmt_quiver_plot.lcm",
+    ],
+    deps = [":quiver_plot_arrow"],
+)
+
+drake_lcm_cc_library(
+    name = "quiver_plot_arrow",
+    lcm_package = "drake",
+    lcm_srcs = [
+        "lcmt_quiver_plot_arrow.lcm",
+    ],
+)
+
+drake_lcm_cc_library(
     name = "body_acceleration",
     lcm_package = "drake",
     lcm_srcs = ["lcmt_body_acceleration.lcm"],

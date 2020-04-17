@@ -1,0 +1,13 @@
+package drake;
+
+struct lcmt_quiver_plot_arrow {
+  // in microseconds
+  int64_t timestamp;
+
+  // in microseconds
+  int64_t duration_us;
+
+  // These are all expressed in the world frame.
+  double point[3];
+  double direction[3];
+}

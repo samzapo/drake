@@ -1,0 +1,9 @@
+package drake;
+
+struct lcmt_quiver_plot {
+  // in microseconds
+  int64_t timestamp;
+
+  int32_t num_arrows;
+  lcmt_quiver_plot_arrow arrows[num_arrows];
+}
