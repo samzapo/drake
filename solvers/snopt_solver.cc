@@ -406,33 +406,57 @@ void EvaluateNonlinearConstraints(
     size_t* grad_index, const Eigen::VectorXd& xvec) {
   const auto& scale_map = prog.GetVariableScaling();
   Eigen::VectorXd this_x;
-  for (const auto& binding : constraint_list) {
-    const auto& c = binding.evaluator();
-    int num_constraints = SingleNonlinearConstraintSize(*c);
 
-    const int num_variables = binding.GetNumElements();
-    this_x.resize(num_variables);
-    // binding_var_indices[i] is the index of binding.variables()(i) in prog's
-    // decision variables.
-    std::vector<int> binding_var_indices(num_variables);
-    for (int i = 0; i < num_variables; ++i) {
-      binding_var_indices[i] =
-          prog.FindDecisionVariableIndex(binding.variables()(i));
-      this_x(i) = xvec(binding_var_indices[i]);
-    }
+  constexpr int kHardwareConcurrency = 64;
 
-    // Scale this_x
-    auto this_x_scaled = math::InitializeAutoDiff(this_x);
-    for (int i = 0; i < num_variables; i++) {
-      auto it = scale_map.find(binding_var_indices[i]);
-      if (it != scale_map.end()) {
-        this_x_scaled(i) *= it->second;
+  std::counting_semaphore<kHardwareConcurrency /* hardware concurrency */>
+      usable_threads{kHardwareConcurrency};
+  std::vector<std::future<AutoDiffVecXd>> ty_list(num_constraints_in_list);
+
+  const int num_constraints_in_list = constraint_list.size();
+  for (int ci = 0; ci < num_constraints_in_list; ++ci) {
+    std::async(std::launch::async, [&, ci]() {
+      const auto& binding = constraint_list[ci];
+      const auto& c = binding.evaluator();
+      int num_constraints = SingleNonlinearConstraintSize(*c);
+
+      const int num_variables = binding.GetNumElements();
+
+      // reserve a thread per async child process (1 for each variable + 1 for
+      // base case).
+      for (int i = 0; i <= num_variables; ++i) usable_threads.acquire();
+
+      this_x.resize(num_variables);
+      // binding_var_indices[i] is the index of binding.variables()(i) in prog's
+      // decision variables.
+      std::vector<int> binding_var_indices(num_variables);
+      for (int i = 0; i < num_variables; ++i) {
+        binding_var_indices[i] =
+            prog.FindDecisionVariableIndex(binding.variables()(i));
+        this_x(i) = xvec(binding_var_indices[i]);
       }
-    }
 
-    AutoDiffVecXd ty;
-    ty.resize(num_constraints);
-    EvaluateSingleNonlinearConstraint(*c, this_x_scaled, &ty);
+      // Scale this_x
+      auto this_x_scaled = math::InitializeAutoDiff(this_x);
+      for (int i = 0; i < num_variables; i++) {
+        auto it = scale_map.find(binding_var_indices[i]);
+        if (it != scale_map.end()) {
+          this_x_scaled(i) *= it->second;
+        }
+      }
+
+      AutoDiffVecXd ty;
+      ty.resize(num_constraints);
+      EvaluateSingleNonlinearConstraint(*c, this_x_scaled, &ty);
+      ty_list[ci] = ty;
+
+      // Release all acquired semafores (1 for each variable + 1 for base case).
+      for (int i = 0; i <= num_variables; ++i) usable_threads.release();
+    });
+  }
+
+  for (int ci = 0; ci < num_constraints_in_list; ++ci) {
+    AutoDiffVecXd& ty = ty_list[ci].get();
 
     for (int i = 0; i < num_constraints; i++) {
       F[(*constraint_index)++] = ty(i).value();
