@@ -1,8 +1,11 @@
 #include "drake/solvers/ipopt_solver_internal.h"
 
 #include <algorithm>
+#include <future>
 #include <limits>
 #include <optional>
+#include <thread>
+#include <vector>
 
 #include "drake/common/text_logging.h"
 
@@ -730,10 +733,69 @@ void IpoptSolver_NLP::EvaluateConstraints(Index n, const Number* x,
   Number* result = constraint_cache_->result.data();
   Number* grad = eval_gradient ? constraint_cache_->grad.data() : nullptr;
 
-  for (const auto& c : problem_->generic_constraints()) {
-    grad += EvaluateConstraint(*problem_, xvec, c, result, grad);
-    result += c.evaluator()->num_constraints();
+  // Evaluate generic constraints, possibly in parallel.
+  {
+    // A struct that stores the gradient and result of a single constraint.
+    struct GradAndResult {
+      std::vector<Number> grad;
+      std::vector<Number> result;
+    };
+
+    const int n_gc = problem_->generic_constraints().size();
+
+    // A function that evaluates the constraint and its gradient.
+    const auto work_fn = [this, &xvec, eval_gradient](int i_gc) {
+      const auto& c = problem_->generic_constraints()[i_gc];
+      const auto& e = *c.evaluator();
+      GradAndResult gr{
+          .grad = std::vector<Number>(eval_gradient
+                                          ? c.variables().rows() *
+                                                e.num_constraints()
+                                          : 0),
+          .result = std::vector<Number>(e.num_constraints()),
+      };
+      const size_t num_vars =
+          EvaluateConstraint(*problem_, xvec, c, &gr.result[0],
+                             eval_gradient ? &gr.grad[0] : nullptr);
+      DRAKE_DEMAND(num_vars == gr.grad.size());
+      return gr;
+    };
+
+    // A vector containing future values promised by each, concurrent constraint
+    // computation.
+    std::vector<std::future<GradAndResult>> grs(n_gc);
+
+    // Schedule all constraint computations so that they are performed
+    // concurently.
+    // Note: the constraits will need to do their own load balancing.
+    for (int i_gc = 0; i_gc < n_gc; ++i_gc) {
+      const auto& e = *problem_->generic_constraints()[i_gc].evaluator();
+
+      // [async] the task is executed on a different thread, potentially by
+      // creating and launching it first.
+      // [deferred] the task is executed on the calling thread the first time
+      // its result is requested (lazy evaluation).
+      grs[i_gc] = std::async(
+          e.may_evaluate_in_parallel() ? std::launch::async : std::launch::deferred,
+          work_fn, i_gc);
+    }
+
+    // Collect the computation results into the pooled constraint values as they
+    // arrive.
+    for (int i_gc = 0; i_gc < n_gc; ++i_gc) {
+      // std::future<...>::get() blocks until it is populated with a value.
+      // Note: For deferred conputation, the task is executed on this thread
+      // now.
+      const auto& gr = grs[i_gc].get();
+      if (eval_gradient) {
+        std::copy_n(gr.grad.begin(), gr.grad.size(), grad);
+        grad += gr.grad.size();
+      }
+      std::copy_n(gr.result.begin(), gr.result.size(), result);
+      result += gr.result.size();
+    }
   }
+
   for (const auto& c : problem_->quadratic_constraints()) {
     grad += EvaluateConstraint(*problem_, xvec, c, result, grad);
     result += c.evaluator()->num_constraints();

@@ -116,6 +116,8 @@ class Constraint : public EvaluatorBase {
   /** Number of rows in the output constraint. */
   int num_constraints() const { return num_outputs(); }
 
+  virtual bool may_evaluate_in_parallel() const { return false; }
+
  protected:
   /** Updates the lower bound.
    * @note if the users want to expose this method in a sub-class, do

@@ -14,6 +14,7 @@ drake_cc_package_library(
     deps = [
         ":direct_collocation",
         ":direct_transcription",
+        ":parallel_generic_direct_transcription",
         ":gcs_trajectory_optimization",
         ":integration_constraint",
         ":kinematic_trajectory_optimization",
@@ -84,6 +85,25 @@ drake_cc_library(
         "//systems/analysis:integrator_base",
         "//systems/framework",
         "//systems/primitives:linear_system",
+    ],
+)
+
+drake_cc_library(
+    name = "parallel_generic_direct_transcription",
+    srcs = [
+        "parallel_generic_direct_transcription.cc",
+    ],
+    hdrs = [
+        "parallel_generic_direct_transcription.h",
+    ],
+    deps = [
+        ":multiple_shooting",
+        "//systems/analysis:simulator",
+        "//common/symbolic:polynomial",
+        "//common/trajectories:piecewise_polynomial",
+        "//math:autodiff",
+        "//math:gradient",
+        "//systems/framework",
     ],
 )
 
@@ -166,6 +186,21 @@ drake_cc_googletest(
         "//solvers:solve",
         "//systems/primitives:symbolic_vector_system",
         "//systems/primitives:trajectory_linear_system",
+    ],
+)
+
+drake_cc_googletest(
+    name = "parallel_generic_direct_transcription_test",
+    data = ["//examples/pendulum:models"],
+    deps = [
+        ":parallel_generic_direct_transcription",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_no_throw",
+        "//common/test_utilities:expect_throws_message",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//solvers:ipopt_solver",
+        "//solvers:solve",
     ],
 )
 
