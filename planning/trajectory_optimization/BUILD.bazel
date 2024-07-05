@@ -191,7 +191,6 @@ drake_cc_googletest(
 
 drake_cc_googletest(
     name = "parallel_generic_direct_transcription_test",
-    data = ["//examples/pendulum:models"],
     deps = [
         ":parallel_generic_direct_transcription",
         "//common/test_utilities:eigen_matrix_compare",
@@ -201,6 +200,7 @@ drake_cc_googletest(
         "//multibody/plant",
         "//solvers:ipopt_solver",
         "//solvers:solve",
+        "//systems/analysis:implicit_euler_integrator",
     ],
 )
 

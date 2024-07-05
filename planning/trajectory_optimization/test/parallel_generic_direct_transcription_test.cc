@@ -8,6 +8,9 @@
 #include "drake/solvers/ipopt_solver.h"
 #include "drake/solvers/mathematical_program.h"
 #include "drake/solvers/solve.h"
+#include "drake/systems/analysis/implicit_euler_integrator.h"
+#include "drake/systems/analysis/integrator_base.h"
+#include "drake/systems/analysis/simulator.h"
 
 namespace drake {
 namespace planning {
@@ -91,15 +94,15 @@ std::unique_ptr<multibody::MultibodyPlant<double>> ConstructTestPlant(
     double time_step = 0.0 /* continuous time is default */) {
   auto mbp = std::make_unique<MultibodyPlant<double>>(time_step);
 
-  const ModelInstanceIndex model_instance =
+  const multibody::ModelInstanceIndex model_instance =
       mbp->HasModelInstanceNamed(body_name)
           ? mbp->GetModelInstanceByName(body_name)
           : mbp->AddModelInstance(body_name);
 
-  const auto M_Bcm = SpatialInertia<double>::SolidCubeWithDensity(
+  const auto M_Bcm = multibody::SpatialInertia<double>::SolidCubeWithDensity(
       1000. /* water density, in kg/m³ */, 1.0 /* length */);
 
-  const RigidBody<T>& rigid_body =
+  const multibody::RigidBody<double>& rigid_body =
       mbp->AddRigidBody(body_name, model_instance, M_Bcm);
 
   mbp->Finalize();
