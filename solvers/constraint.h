@@ -46,7 +46,7 @@ namespace solvers {
  */
 class Constraint : public EvaluatorBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Constraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Constraint);
 
   /**
    * Constructs a constraint which has `num_constraints` rows, with an input
@@ -54,8 +54,10 @@ class Constraint : public EvaluatorBase {
    * @param num_constraints. The number of rows in the constraint output.
    * @param num_vars. The number of rows in the input.
    * If the input dimension is unknown, then set `num_vars` to Eigen::Dynamic.
-   * @param lb Lower bound, which must be a `num_constraints` x 1 vector.
-   * @param ub Upper bound, which must be a `num_constraints` x 1 vector.
+   * @param lb Lower bound, which must be a `num_constraints` x 1 vector, lb
+   * cannot contain NAN.
+   * @param ub Upper bound, which must be a `num_constraints` x 1 vector, ub
+   * cannot contain NAN.
    * @see Eval(...)
    */
   template <typename DerivedLB, typename DerivedUB>
@@ -67,8 +69,8 @@ class Constraint : public EvaluatorBase {
         lower_bound_(lb),
         upper_bound_(ub) {
     check(num_constraints);
-    DRAKE_DEMAND(!lower_bound_.array().isNaN().any());
-    DRAKE_DEMAND(!upper_bound_.array().isNaN().any());
+    DRAKE_THROW_UNLESS(!lower_bound_.array().isNaN().any());
+    DRAKE_THROW_UNLESS(!upper_bound_.array().isNaN().any());
   }
 
   /**
@@ -91,22 +93,23 @@ class Constraint : public EvaluatorBase {
    * Return whether this constraint is satisfied by the given value, `x`.
    * @param x A `num_vars` x 1 vector.
    * @param tol A tolerance for bound checking.
+   * @throws std::exception if the size of x isn't correct.
    */
   bool CheckSatisfied(const Eigen::Ref<const Eigen::VectorXd>& x,
                       double tol = 1E-6) const {
-    DRAKE_ASSERT(x.rows() == num_vars() || num_vars() == Eigen::Dynamic);
+    DRAKE_THROW_UNLESS(x.rows() == num_vars() || num_vars() == Eigen::Dynamic);
     return DoCheckSatisfied(x, tol);
   }
 
   bool CheckSatisfied(const Eigen::Ref<const AutoDiffVecXd>& x,
                       double tol = 1E-6) const {
-    DRAKE_ASSERT(x.rows() == num_vars() || num_vars() == Eigen::Dynamic);
+    DRAKE_THROW_UNLESS(x.rows() == num_vars() || num_vars() == Eigen::Dynamic);
     return DoCheckSatisfied(x, tol);
   }
 
   symbolic::Formula CheckSatisfied(
       const Eigen::Ref<const VectorX<symbolic::Variable>>& x) const {
-    DRAKE_ASSERT(x.rows() == num_vars() || num_vars() == Eigen::Dynamic);
+    DRAKE_THROW_UNLESS(x.rows() == num_vars() || num_vars() == Eigen::Dynamic);
     return DoCheckSatisfied(x);
   }
 
@@ -196,7 +199,7 @@ class Constraint : public EvaluatorBase {
  */
 class QuadraticConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(QuadraticConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(QuadraticConstraint);
 
   static const int kNumConstraints = 1;
 
@@ -224,6 +227,8 @@ class QuadraticConstraint : public Constraint {
    * type of Q0. To speed up the constructor, set hessian_type != std::nullopt
    * if you can. If this type is set incorrectly, then the downstream code (for
    * example the solver) will malfunction.
+   * @throws std::exception if Q0 isn't a square matrix, or b.rows() !=
+   * Q0.rows().
    */
   template <typename DerivedQ, typename Derivedb>
   QuadraticConstraint(const Eigen::MatrixBase<DerivedQ>& Q0,
@@ -235,8 +240,8 @@ class QuadraticConstraint : public Constraint {
         Q_((Q0 + Q0.transpose()) / 2),
         b_(b) {
     UpdateHessianType(hessian_type);
-    DRAKE_ASSERT(Q_.rows() == Q_.cols());
-    DRAKE_ASSERT(Q_.cols() == b_.rows());
+    DRAKE_THROW_UNLESS(Q_.rows() == Q_.cols());
+    DRAKE_THROW_UNLESS(Q_.cols() == b_.rows());
   }
 
   ~QuadraticConstraint() override {}
@@ -340,7 +345,7 @@ class QuadraticConstraint : public Constraint {
  */
 class LorentzConeConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LorentzConeConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LorentzConeConstraint);
 
   /**
    * We provide three possible Eval functions to represent the Lorentz cone
@@ -359,6 +364,9 @@ class LorentzConeConstraint : public Constraint {
                 ///< nonlinear solver can get stuck.
   };
 
+  /**
+   @throws std::exception if A.row() < 2.
+   */
   LorentzConeConstraint(const Eigen::Ref<const Eigen::MatrixXd>& A,
                         const Eigen::Ref<const Eigen::VectorXd>& b,
                         EvalType eval_type = EvalType::kConvexSmooth);
@@ -436,8 +444,11 @@ class LorentzConeConstraint : public Constraint {
  */
 class RotatedLorentzConeConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RotatedLorentzConeConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RotatedLorentzConeConstraint);
 
+  /**
+   @throws std::exception if A.rows() < 3.
+   */
   RotatedLorentzConeConstraint(const Eigen::Ref<const Eigen::MatrixXd>& A,
                                const Eigen::Ref<const Eigen::VectorXd>& b)
       : Constraint(
@@ -446,8 +457,8 @@ class RotatedLorentzConeConstraint : public Constraint {
         A_(A.sparseView()),
         A_dense_(A),
         b_(b) {
-    DRAKE_DEMAND(A_.rows() >= 3);
-    DRAKE_ASSERT(A_.rows() == b_.rows());
+    DRAKE_THROW_UNLESS(A_.rows() >= 3);
+    DRAKE_THROW_UNLESS(A_.rows() == b_.rows());
   }
 
   /** Getter for A. */
@@ -464,7 +475,7 @@ class RotatedLorentzConeConstraint : public Constraint {
   /**
    * Updates the coefficients, the updated constraint is z=new_A * x + new_b in
    * the rotated Lorentz cone.
-   * @throw std::exception if the new_A.cols() != A.cols(), namely the variable
+   * @throws std::exception if the new_A.cols() != A.cols(), namely the variable
    * size should not change.
    * @pre new_A.rows() >= 3 and new_A.rows() == new_b.rows().
    */
@@ -507,7 +518,7 @@ class RotatedLorentzConeConstraint : public Constraint {
 template <typename EvaluatorType = EvaluatorBase>
 class EvaluatorConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(EvaluatorConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(EvaluatorConstraint);
 
   /**
    * Constructs an evaluator constraint, given the EvaluatorType instance
@@ -565,7 +576,7 @@ class EvaluatorConstraint : public Constraint {
  */
 class PolynomialConstraint : public EvaluatorConstraint<PolynomialEvaluator> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PolynomialConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PolynomialConstraint);
 
   /**
    * Constructs a polynomial constraint
@@ -601,7 +612,7 @@ class PolynomialConstraint : public EvaluatorConstraint<PolynomialEvaluator> {
  */
 class LinearConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearConstraint);
 
   /**
    * Construct the linear constraint lb <= A*x <= ub
@@ -716,7 +727,7 @@ class LinearConstraint : public Constraint {
  */
 class LinearEqualityConstraint : public LinearConstraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearEqualityConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearEqualityConstraint);
 
   /**
    * Constructs the linear equality constraint Aeq * x = beq.
@@ -808,7 +819,7 @@ class LinearEqualityConstraint : public LinearConstraint {
  */
 class BoundingBoxConstraint : public LinearConstraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(BoundingBoxConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(BoundingBoxConstraint);
 
   BoundingBoxConstraint(const Eigen::Ref<const Eigen::VectorXd>& lb,
                         const Eigen::Ref<const Eigen::VectorXd>& ub);
@@ -861,7 +872,7 @@ class BoundingBoxConstraint : public LinearConstraint {
  */
 class LinearComplementarityConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearComplementarityConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearComplementarityConstraint);
 
   template <typename DerivedM, typename Derivedq>
   LinearComplementarityConstraint(const Eigen::MatrixBase<DerivedM>& M,
@@ -917,7 +928,7 @@ class LinearComplementarityConstraint : public Constraint {
  */
 class PositiveSemidefiniteConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PositiveSemidefiniteConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PositiveSemidefiniteConstraint);
 
   /**
    * Impose the constraint that a symmetric matrix with size @p rows x @p rows
@@ -1026,7 +1037,7 @@ class PositiveSemidefiniteConstraint : public Constraint {
  */
 class LinearMatrixInequalityConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearMatrixInequalityConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearMatrixInequalityConstraint);
 
   /**
    * @param F Each symmetric matrix F[i] should be of the same size.
@@ -1084,7 +1095,7 @@ class LinearMatrixInequalityConstraint : public Constraint {
  */
 class ExpressionConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ExpressionConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ExpressionConstraint);
 
   ExpressionConstraint(const Eigen::Ref<const VectorX<symbolic::Expression>>& v,
                        const Eigen::Ref<const Eigen::VectorXd>& lb,
@@ -1153,7 +1164,7 @@ class ExpressionConstraint : public Constraint {
  */
 class ExponentialConeConstraint : public Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ExponentialConeConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ExponentialConeConstraint);
 
   /**
    * Constructor for exponential cone.
