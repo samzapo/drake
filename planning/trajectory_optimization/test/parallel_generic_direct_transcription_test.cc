@@ -1,9 +1,12 @@
 
 #include "drake/planning/trajectory_optimization/parallel_generic_direct_transcription.h"
 
+#include <gtest/gtest.h>
+
 #include "drake/common/eigen_types.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/multibody/math/spatial_algebra.h"
+#include "drake/multibody/plant/externally_applied_spatial_force.h"
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/solvers/ipopt_solver.h"
 #include "drake/solvers/mathematical_program.h"
@@ -16,6 +19,22 @@ namespace drake {
 namespace planning {
 namespace trajectory_optimization {
 namespace {
+
+template <typename Derived>
+std::ostream& operator<<(std::ostream& out,
+                         const Eigen::MatrixBase<Derived>& m) {
+  out << "(" << m.rows() << "x" << m.cols() << "), (norm=" << m.norm() << "), ";
+  const bool is_vector = m.cols() == 1 || m.rows() == 1;
+  if (!is_vector) out << std::endl;
+  for (int i = 0; i < m.rows(); ++i) {
+    for (int j = 0; j < m.cols(); ++j) {
+      out << m(i, j) << " ";
+    }
+    if (!is_vector) out << std::endl;
+  }
+
+  return out;
+}
 
 constexpr size_t kThreeFor3D = 3;
 constexpr size_t kSixSpatialDofs = kThreeFor3D * 2;
@@ -49,13 +68,13 @@ using FloatingBodySpatialVelocityVector =
  as the first component.
  */
 template <typename T>
-FloatingBodyPoseVector<T> ToVector(const math::RigidTransform<T>& X) {
+FloatingBodyPoseVector<double> ToVector(const math::RigidTransform<double>& X) {
   // Checks if rotation matrix is valid.
-  DR_DEMAND(X.rotation().IsValid());
+  DRAKE_DEMAND(X.rotation().IsValid());
 
-  const Eigen::Quaternion<T> quat = X.rotation().ToQuaternion();
+  const Eigen::Quaternion<double> quat = X.rotation().ToQuaternion();
 
-  FloatingBodyPoseVector<T> v;
+  FloatingBodyPoseVector<double> v;
   v[0] = quat.w();
   v[1] = quat.x();
   v[2] = quat.y();
@@ -75,24 +94,28 @@ FloatingBodyPoseVector<T> ToVector(const math::RigidTransform<T>& X) {
  quaternion representation will result in a normalized (unit) quaternion.
  */
 template <typename T>
-math::RigidTransform<T> ToRigidTransform(Eigen::Ref<const VectorX<T>> v) {
-  DR_DEMAND(v.size() == kNumFloatingBodyPositions);
-  DR_DEMAND(v.allFinite());
-  DR_DEMAND(!v.template head<kFourForQuaternion>().isZero());
+math::RigidTransform<double> ToRigidTransform(
+    Eigen::Ref<const VectorX<double>> v) {
+  DRAKE_DEMAND(v.size() == kNumFloatingBodyPositions);
+  DRAKE_DEMAND(v.allFinite());
+  DRAKE_DEMAND(!v.template head<kFourForQuaternion>().isZero());
 
-  const Eigen::Quaternion<T> quat(v[0], v[1], v[2], v[3]);
+  const Eigen::Quaternion<double> quat(v[0], v[1], v[2], v[3]);
 
   // Note that this RotationMatrix constructor does not require the quaternion
   // to be normalized.
-  const math::RotationMatrix<T> R(quat);
-  math::RigidTransform<T> X(R, v.template tail<kThreeFor3D>());
+  const math::RotationMatrix<double> R(quat);
+  math::RigidTransform<double> X(R, v.template tail<kThreeFor3D>());
   return X;
 }
 
 std::unique_ptr<multibody::MultibodyPlant<double>> ConstructTestPlant(
     const std::string& body_name,
     double time_step = 0.0 /* continuous time is default */) {
-  auto mbp = std::make_unique<MultibodyPlant<double>>(time_step);
+  auto mbp = std::make_unique<multibody::MultibodyPlant<double>>(time_step);
+
+  const Vector3<double> kDefaultGravityVector(0, 0, 0);
+  mbp->mutable_gravity_field().set_gravity_vector(kDefaultGravityVector);
 
   const multibody::ModelInstanceIndex model_instance =
       mbp->HasModelInstanceNamed(body_name)
@@ -100,10 +123,9 @@ std::unique_ptr<multibody::MultibodyPlant<double>> ConstructTestPlant(
           : mbp->AddModelInstance(body_name);
 
   const auto M_Bcm = multibody::SpatialInertia<double>::SolidCubeWithDensity(
-      1000. /* water density, in kg/m³ */, 1.0 /* length */);
+      1000. /* water density, in kg/m³ */, 0.1 /* length */);
 
-  const multibody::RigidBody<double>& rigid_body =
-      mbp->AddRigidBody(body_name, model_instance, M_Bcm);
+  mbp->AddRigidBody(body_name, model_instance, M_Bcm);
 
   mbp->Finalize();
   return mbp;
@@ -111,128 +133,127 @@ std::unique_ptr<multibody::MultibodyPlant<double>> ConstructTestPlant(
 
 GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
            FixedTimestepTest) {
+  using namespace std::chrono_literals;
+
   const std::string kBodyName = "cube";
-  auto plant_ptr = ConstructTestPlant(kBodyName);
-  auto& plant = *plant_ptr;
+  auto system = ConstructTestPlant(kBodyName);
+  auto& plant = *system;
 
-  auto& body = plant.GetBodyByName(kBodyName);
+  const auto& body = plant.GetBodyByName(kBodyName);
+
+  const math::RigidTransform<double> X_WB_inital =
+      math::RigidTransform<double>::Identity();
+
   const auto construct_simulator_fn = [&]() {
-    auto simulator = std::make_unique<systems::Simulator<T>>(plant);
+    auto simulator = std::make_unique<systems::Simulator<double>>(plant);
 
-    using namespace std::chrono_literals;
-    const double kMinTimeStep = std::chrono::duration<double>(1ms).count();
-    const double kMaxTimeStep = std::chrono::duration<double>(1s).count();
+    // const double kMinTimeStep = std::chrono::duration<double>(1ns).count();
+    // const double kMaxTimeStep = std::chrono::duration<double>(1s).count();
 
-    auto& integrator =
-        simulator
-            ->template reset_integrator<systems::ImplicitEulerIntegrator<T>>();
-    integrator.set_target_accuracy(1e-6);
-    integrator.set_reuse(true);
-    integrator.set_maximum_step_size(kMaxTimeStep);
-    integrator.set_requested_minimum_step_size(kMinTimeStep);
+    // auto& integrator = simulator->template reset_integrator<
+    //     systems::ImplicitEulerIntegrator<double>>();
+    // integrator.set_target_accuracy(1e-6);
+    // integrator.set_reuse(true);
+    // integrator.set_maximum_step_size(kMaxTimeStep);
+    // integrator.set_requested_minimum_step_size(kMinTimeStep);
 
     return simulator;
   };
 
+  const int kNumStates = kThreeFor3D + kThreeFor3D;
   const auto set_state_fn =
-      [&](systems::Context<T>* context,
-          const Eigen::Ref<const Eigen::VectorXd>& q_v_body) {
-        auto& q_v_plant = context->get_mutable_continuous_state_vector();
-        q_v_plant.temaplte segment<kNumFloatingBodyPositions>(
-            body.floating_positions_start()) =
-            q_v_body.template head<kNumFloatingBodyPositions>();
+      [&](systems::Context<double>* context,
+          const Eigen::Ref<const Eigen::VectorXd>& p_v_body) {
+        auto q_v_plant = dynamic_cast<systems::BasicVector<double>&>(
+                             context->get_mutable_continuous_state_vector())
+                             .get_mutable_value();
 
-        q_v_plant.temaplte segment<kNumFloatingBodyVelocities>(
+        const math::RigidTransform<double> X_WB(
+            X_WB_inital.rotation(), p_v_body.template head<kThreeFor3D>());
+
+        q_v_plant.template segment<kNumFloatingBodyPositions>(
+            body.floating_positions_start()) = ToVector<double>(X_WB);
+
+        const multibody::SpatialVelocity<double> V_WBo_W(
+            Vector3<double>::Zero() /* w */,
+            p_v_body.template tail<kThreeFor3D>() /* v */);
+
+        q_v_plant.template segment<kNumFloatingBodyVelocities>(
             plant.num_positions() + body.floating_velocities_start_in_v()) =
-            q_v_body.template tail<kNumFloatingBodyVelocities>();
+            V_WBo_W.get_coeffs();
       };
 
   const auto get_state_fn =
-      [&body](const systems::Context<T>& context) -> Eigen::VectorXd {
-    FloatingBodyStateVector<double> q_v;
-    q_v.template head<kNumFloatingBodyPositions>() =
-        body.EvalPoseInWorld(context);
-    q_v.template tail<kNumFloatingBodyVelocities>() =
-        body.EvalSpatialVelocityInWorld(context).get_coeffs();
+      [&body](const systems::Context<double>& context) -> Eigen::VectorXd {
+    Vector<double, kNumStates> p_v_body;
+    p_v_body.template head<kThreeFor3D>() =
+        body.EvalPoseInWorld(context).translation();
+    p_v_body.template tail<kThreeFor3D>() =
+        body.EvalSpatialVelocityInWorld(context).translational();
 
-    return q_v;
+    return p_v_body;
   };
 
-  const auto set_input_fn = [&](systems::Context<T>* context,
+  constexpr int kNumInputs = kThreeFor3D;
+  const auto set_input_fn = [&](systems::Context<double>* context,
                                 const Eigen::Ref<const Eigen::VectorXd>& u) {
+    DRAKE_ASSERT(u.rows() == kNumInputs);
     std::vector<multibody::ExternallyAppliedSpatialForce<double>> forces{
         {
             .body_index = body.index(),
-            .p_BoBq_B = Vector3<T>::Zero(),
-            .F_Bq_W = multibody::SpatialForce<T>(u),
+            .p_BoBq_B = Vector3<double>::Zero(),
+            .F_Bq_W = multibody::SpatialForce<double>(
+                Vector3<double>::Zero() /* tau */, u /* f */),
         },
     };
 
     plant.get_applied_spatial_force_input_port().FixValue(context, forces);
   };
 
-  math::RigidTransform<double> X_WB_inital =
-      math::RigidTransform<double>::Identity();
+  Vector<double, kNumStates> q_v_initial;
+  q_v_initial.template head<kThreeFor3D>() = X_WB_inital.translation();
+  q_v_initial.template tail<kThreeFor3D>() = Vector3<double>::Zero();
 
-  math::RigidTransform<double> X_WB_final(
-      math::RotationMatrix<double>::MakeYRotation(M_PI / 16) *
-          math::RotationMatrix<double>::MakeZRotation(M_PI / 8),
-      Vector3<double>(10., 10., 10.) /* p */);
+  Vector<double, kNumStates> q_v_final;
+  q_v_final.template head<kThreeFor3D>() = Vector3<double>(1., 1., 1.);
+  q_v_final.template tail<kThreeFor3D>() = Vector3<double>::Zero();
 
-  FloatingBodyStateVector<double> q_v_initial;
-  q_v_initial.template head<kNumFloatingBodyPositions>() =
-      ToVector(X_WB_inital);
-  q_v_initial.template tail<kNumFloatingBodyVelocities>() =
-      FloatingBodySpatialVelocityVector<double>::Zero();
-
-  FloatingBodyStateVector<double> q_v_final;
-  q_v_initial.template head<kNumFloatingBodyPositions>() = ToVector(X_WB_final);
-  q_v_initial.template tail<kNumFloatingBodyVelocities>() =
-      FloatingBodySpatialVelocityVector<double>::Zero();
-
-  systems::BasicVector<double> initial_state(q_v_initial);
-  systems::BasicVector<double> final_state(q_v_final);
-  const int num_states = initial_state.get_value().rows();
-
-  const int kNumSegments = 2;
+  const int kNumSegments = 4;
+  const int kNumTimeSamples = kNumSegments + 1;
   const int kUpdateInterval = std::chrono::duration<double>(1s).count();
 
-  auto multiple_shooting =
-      std::make_unique<ParallelGenericDirectTranscription<T>>(
-          construct_simulator_fn, set_state_fn, set_input_fn, get_state_fn,
-          num_states, kSixSpatialDofs, kNumSegments, kUpdateInterval);
+  auto multiple_shooting = std::make_unique<ParallelGenericDirectTranscription>(
+      construct_simulator_fn, set_state_fn, set_input_fn, get_state_fn,
+      kNumStates, kNumInputs, kNumTimeSamples, kUpdateInterval);
 
   auto& prog = multiple_shooting->prog();
 
   const solvers::VectorXDecisionVariable& u = multiple_shooting->input();
-  multiple_shooting->AddRunningCost(u * u.transpose());
+  multiple_shooting->AddRunningCost(u.transpose() * u);
 
   // Set fixed end points.
-  prog.AddLinearConstraint(multiple_shooting->initial_state() ==
-                           initial_state.get_value());
-  prog.AddLinearConstraint(multiple_shooting->final_state() ==
-                           final_state.get_value());
+  prog.AddLinearConstraint(multiple_shooting->initial_state() == q_v_initial);
+  prog.AddLinearConstraint(multiple_shooting->final_state() == q_v_final);
 
   {
-    std::vector<double> breaks(num_segments + 1);
-    std::vector<MatrixX<double>> x_samples(num_segments + 1);
-    std::vector<MatrixX<double>> u_samples(num_segments + 1);
-    for (int i = 0; i <= num_segments; i++) {
+    std::vector<double> breaks(kNumTimeSamples);
+    std::vector<MatrixX<double>> x_samples(kNumTimeSamples);
+    std::vector<MatrixX<double>> u_samples(kNumTimeSamples);
+    for (int i = 0; i <= kNumSegments; i++) {
       const double progress =
-          (static_cast<double>(i) / static_cast<double>(num_segments));
-      breaks[i] = expected_voyage_duration * progress;
+          (static_cast<double>(i) / static_cast<double>(kNumSegments));
+      breaks[i] = kUpdateInterval * static_cast<double>(i);
 
-      x_samples[i] = initial_state.get_value() * (1.0 - progress) +
-                     final_state.get_value() * progress;
+      x_samples[i] = q_v_initial * (1.0 - progress) + q_v_final * progress;
 
-      Vector<T, kNumInputs> u_sample = Vector<T, kNumInputs>::Zero();
-
+      Vector<double, kNumInputs> u_sample = Vector<double, kNumInputs>::Zero();
       u_samples[i] = u_sample;
     }
 
     // Create an initial guess for the state trajectory.
     multiple_shooting->SetInitialTrajectory(
-        trajectories::PiecewisePolynomial<double>::ZeroOrderHold(),
+        trajectories::PiecewisePolynomial<double>::ZeroOrderHold(breaks,
+                                                                 u_samples),
         trajectories::PiecewisePolynomial<double>::FirstOrderHold(breaks,
                                                                   x_samples));
   }
@@ -260,8 +281,19 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
   log()->critical("Status: {}", solver_details.ConvertStatusToString());
 
   const auto inputs = multiple_shooting->ReconstructInputTrajectory(result);
-  const auto state = multiple_shooting->ReconstructStateTrajectory(result);
-  const std::vector<double>& breaks = state.get_segment_times();
+  const auto states = multiple_shooting->ReconstructStateTrajectory(result);
+  const std::vector<double>& breaks = states.get_segment_times();
+  const size_t N = breaks.size();
+
+  for (size_t i = 0; i < N; ++i) {
+    const double start_time = breaks[i];
+    const Vector<double, kNumInputs> input = inputs.value(start_time);
+    const Vector<double, kNumStates> state = states.value(start_time);
+
+    std::cout << "@t=" << start_time << std::endl;
+    std::cout << "\tu=" << input.transpose() << std::endl;
+    std::cout << "\tx=" << state.transpose() << std::endl;
+  }
 
   // Replay the final trajectory in the logs.
   if (result.is_success()) {
@@ -272,17 +304,20 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
     auto& context = simulator->get_mutable_context();
     context.SetTime(breaks[0]);
     simulator->Initialize();
-    const double dt = (inputs.end_time() - inputs.start_time()) /
-                      (static_cast<double>(num_segments) * 100.);
-    for (double t = inputs.start_time(); t <= inputs.end_time(); t += dt) {
-      set_input_fn(&context, inputs.value(t));
-      simulator->AdvanceTo(t);
+    for (size_t i = 0; i < N - 1; ++i) {
+      const double start_time = breaks[i];
+      const double end_time = breaks[i + 1];
+
+      const Vector<double, kNumInputs> input = inputs.value(start_time);
+      set_input_fn(&context, input);
+
+      simulator->AdvanceTo(end_time);
     }
   } else {
     log()->critical("FAILURE!");
 
     // Replay each segment.
-    for (size_t i = 0; i < breaks.size() - 1; ++i) {
+    for (size_t i = 0; i < N - 1; ++i) {
       const double start_time = breaks[i];
       const double end_time = breaks[i + 1];
       auto simulator = construct_simulator_fn();
@@ -290,18 +325,21 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
 
       context.SetTime(start_time);
 
-      set_state_fn(&context, state.value(start_time));
-      set_input_fn(&context, inputs.value(start_time));
+      const Vector<double, kNumInputs> input = inputs.value(start_time);
+      const Vector<double, kNumStates> state = states.value(start_time);
+
+      set_input_fn(&context, input);
+      set_state_fn(&context, state);
 
       simulator->Initialize();
 
-      const double dt = (end_time - start_time) / 100.;
-      for (double t = start_time; t <= end_time; t += dt) {
-        try {
-          simulator->AdvanceTo(t);
-        } catch (...) {
-          break;
-        }
+      try {
+        simulator->AdvanceTo(end_time);
+      } catch (const std::exception& e) {
+        std::cout << "\t... Segment threw an exception: " << e.what()
+                  << std::endl;
+      } catch (...) {
+        std::cout << "\t... Segment threw an unknown error." << std::endl;
       }
     }
   }

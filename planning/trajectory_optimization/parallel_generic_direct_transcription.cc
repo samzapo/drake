@@ -1,6 +1,7 @@
 #include "drake/planning/trajectory_optimization/parallel_generic_direct_transcription.h"
 
 #include <future>
+#include <iostream>
 #include <semaphore>
 
 // FIXME(samzapo): maybe get this value elsewhere, must be a constexpr (i.e.
@@ -14,6 +15,23 @@ namespace planning {
 namespace trajectory_optimization {
 
 namespace {
+
+template <typename Derived>
+std::ostream& operator<<(std::ostream& out,
+                         const Eigen::MatrixBase<Derived>& m) {
+  out << "(" << m.rows() << "x" << m.cols() << "), (norm=" << m.norm() << "), ";
+  const bool is_vector = m.cols() == 1 || m.rows() == 1;
+  if (!is_vector) out << std::endl;
+  for (int i = 0; i < m.rows(); ++i) {
+    for (int j = 0; j < m.cols(); ++j) {
+      out << m(i, j) << " ";
+    }
+    if (!is_vector) out << std::endl;
+  }
+
+  return out;
+}
+
 // Implements a constraint on the defect between the state variables
 // advanced for one update interval and the decision variable representing the
 // next state.
@@ -78,7 +96,7 @@ class DirectTranscriptionConstraint : public solvers::Constraint {
     try {
       simulator->AdvanceTo(evaluation_time_ + h);
     } catch (const std::runtime_error&) {
-      log()->debug(
+      log()->critical(
           "A simulation run terminated early: @t={}s, which is {}s after start "
           "time, t={}s",
           context.get_time(), context.get_time() - evaluation_time_,
@@ -144,6 +162,8 @@ class DirectTranscriptionConstraint : public solvers::Constraint {
       MatrixX<double> dy_dx(m, n);
       for (int j = 0; j < n; ++j)
         dy_dx.col(j) = (y_prime_result[j].get() - y_t) * (1. / dx);
+
+      // std::cout << dy_dx << std::endl;
 
       // Assign output.
       auto& y = *y_in;
