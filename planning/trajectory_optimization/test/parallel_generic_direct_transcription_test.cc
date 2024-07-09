@@ -147,15 +147,13 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
   const auto construct_simulator_fn = [&]() {
     auto simulator = std::make_unique<systems::Simulator<double>>(plant);
 
-    // const double kMinTimeStep = std::chrono::duration<double>(1ns).count();
-    // const double kMaxTimeStep = std::chrono::duration<double>(1s).count();
+    const double kMinTimeStep = std::chrono::duration<double>(1ns).count();
+    const double kMaxTimeStep = std::chrono::duration<double>(1s).count();
 
-    // auto& integrator = simulator->template reset_integrator<
-    //     systems::ImplicitEulerIntegrator<double>>();
-    // integrator.set_target_accuracy(1e-6);
-    // integrator.set_reuse(true);
-    // integrator.set_maximum_step_size(kMaxTimeStep);
-    // integrator.set_requested_minimum_step_size(kMinTimeStep);
+    auto& integrator = simulator->template reset_integrator<
+        systems::ImplicitEulerIntegrator<double>>();
+    integrator.set_maximum_step_size(kMaxTimeStep);
+    integrator.set_requested_minimum_step_size(kMinTimeStep);
 
     return simulator;
   };
