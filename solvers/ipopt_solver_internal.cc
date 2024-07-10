@@ -784,7 +784,7 @@ void IpoptSolver_NLP::EvaluateConstraints(Index n, const Number* x,
     // arrive.
     for (int i_gc = 0; i_gc < n_gc; ++i_gc) {
       // std::future<...>::get() blocks until it is populated with a value.
-      // Note: For deferred conputation, the task is executed on this thread
+      // Note: For deferred computation, the task is executed on this thread
       // now.
       const auto& gr = grs[i_gc].get();
       if (eval_gradient) {
