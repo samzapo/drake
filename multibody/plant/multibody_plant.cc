@@ -23,6 +23,7 @@
 #include "drake/multibody/plant/discrete_update_manager.h"
 #include "drake/multibody/plant/externally_applied_spatial_force.h"
 #include "drake/multibody/plant/geometry_contact_data.h"
+#include "drake/multibody/plant/hydroelastic_contact_forces_continuous_cache_data.h"
 #include "drake/multibody/plant/hydroelastic_traction_calculator.h"
 #include "drake/multibody/plant/make_discrete_update_manager.h"
 #include "drake/multibody/plant/slicing_and_indexing.h"
@@ -44,42 +45,37 @@ namespace multibody {
 // pre-finalize.
 #define DRAKE_MBP_THROW_IF_NOT_FINALIZED() ThrowIfNotFinalized(__func__)
 
-using geometry::CollisionFilterDeclaration;
-using geometry::CollisionFilterScope;
-using geometry::ContactSurface;
-using geometry::FrameId;
-using geometry::FramePoseVector;
-using geometry::GeometryFrame;
-using geometry::GeometryId;
-using geometry::GeometryInstance;
-using geometry::GeometrySet;
-using geometry::PenetrationAsPointPair;
-using geometry::ProximityProperties;
-using geometry::SceneGraph;
-using geometry::SceneGraphInspector;
-using geometry::SourceId;
-using geometry::render::RenderLabel;
-using systems::DependencyTicket;
-using systems::InputPort;
-using systems::OutputPort;
-using systems::State;
-
+using drake::geometry::CollisionFilterDeclaration;
+using drake::geometry::CollisionFilterScope;
+using drake::geometry::ContactSurface;
+using drake::geometry::FrameId;
+using drake::geometry::FramePoseVector;
+using drake::geometry::GeometryFrame;
+using drake::geometry::GeometryId;
+using drake::geometry::GeometryInstance;
+using drake::geometry::GeometrySet;
+using drake::geometry::PenetrationAsPointPair;
+using drake::geometry::ProximityProperties;
+using drake::geometry::SceneGraph;
+using drake::geometry::SceneGraphInspector;
+using drake::geometry::SourceId;
+using drake::geometry::render::RenderLabel;
 using drake::math::RigidTransform;
 using drake::math::RotationMatrix;
-using drake::multibody::MultibodyForces;
-using drake::multibody::SpatialAcceleration;
-using drake::multibody::SpatialForce;
 using drake::multibody::internal::AccelerationKinematicsCache;
 using drake::multibody::internal::ArticulatedBodyForceCache;
 using drake::multibody::internal::ArticulatedBodyInertiaCache;
 using drake::multibody::internal::GeometryContactData;
 using drake::multibody::internal::PositionKinematicsCache;
 using drake::multibody::internal::VelocityKinematicsCache;
-using systems::BasicVector;
-using systems::Context;
-using systems::InputPort;
-using systems::InputPortIndex;
-using systems::OutputPortIndex;
+using drake::systems::BasicVector;
+using drake::systems::Context;
+using drake::systems::DependencyTicket;
+using drake::systems::InputPort;
+using drake::systems::InputPortIndex;
+using drake::systems::OutputPort;
+using drake::systems::OutputPortIndex;
+using drake::systems::State;
 
 namespace internal {
 // This is a helper struct used to estimate the parameters used in the penalty
@@ -2262,10 +2258,9 @@ void MultibodyPlant<T>::CalcHydroelasticContactForcesContinuous(
         geometryM_id, geometryN_id, inspector);
 
     // Integrate the hydroelastic traction field over the contact surface.
-    std::vector<HydroelasticQuadraturePointData<T>> traction_output;
     SpatialForce<T> F_Ac_W;
     traction_calculator.ComputeSpatialForcesAtCentroidFromHydroelasticModel(
-        data, dissipation, dynamic_friction, &traction_output, &F_Ac_W);
+        data, dissipation, dynamic_friction, &F_Ac_W);
 
     // Shift the traction at the centroid to tractions at the body origins.
     SpatialForce<T> F_Ao_W, F_Bo_W;
@@ -2281,7 +2276,7 @@ void MultibodyPlant<T>::CalcHydroelasticContactForcesContinuous(
     }
 
     // Add the information for contact reporting.
-    contact_info.emplace_back(&surface, F_Ac_W, std::move(traction_output));
+    contact_info.emplace_back(&surface, F_Ac_W);
   }
 }
 
