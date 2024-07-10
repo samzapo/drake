@@ -362,6 +362,8 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
       }
     }
   }
+
+  EXPECT_TRUE(result.is_success());
 }
 
 }  // namespace
