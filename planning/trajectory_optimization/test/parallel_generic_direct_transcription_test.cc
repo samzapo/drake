@@ -141,6 +141,9 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
 
   const auto& body = plant.GetBodyByName(kBodyName);
 
+  const math::RigidTransform<double> X_WB_inital =
+      math::RigidTransform<double>::Identity();
+
   const auto construct_simulator_fn = [&]() {
     auto simulator = std::make_unique<systems::Simulator<double>>(plant);
 
@@ -155,18 +158,19 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
     return simulator;
   };
 
-  const int kNumStates = kNumFloatingBodyPositions + kNumFloatingBodyVelocities;
+  const int kNumStates = kThreeFor3D /* p */ + kThreeFor3D /* v */;
   const auto set_state_fn =
       [&](systems::Context<double>* context,
-          const Eigen::Ref<const Eigen::VectorXd>& q_v_body) {
-        DRAKE_DEMAND(q_v_body.rows() == kNumStates);
+          const Eigen::Ref<const Eigen::VectorXd>& p_v_body) {
+        DRAKE_DEMAND(p_v_body.rows() == kNumStates);
 
         // Get body state from input vector.
-        const auto X_WB = ToRigidTransform<double>(
-            q_v_body.template head<kNumFloatingBodyPositions>());
+        const math::RigidTransform<double> X_WB(
+            X_WB_inital.rotation(), p_v_body.template head<kThreeFor3D>());
 
         const multibody::SpatialVelocity<double> V_WBo_W(
-            q_v_body.template tail<kNumFloatingBodyVelocities>());
+            Vector3<double>::Zero() /* w */,
+            p_v_body.template tail<kThreeFor3D>() /* v */);
 
         // Get mutable state from plant.
         auto q_v_plant = dynamic_cast<systems::BasicVector<double>&>(
@@ -190,51 +194,39 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
     const auto& V_WBo_W = body.EvalSpatialVelocityInWorld(context);
 
     // Construct output vector.
-    FloatingBodyStateVector<double> q_v_body;
-    auto q_body = q_v_body.template head<kNumFloatingBodyPositions>();
-    auto v_body = q_v_body.template tail<kNumFloatingBodyVelocities>();
-    DRAKE_DEMAND(q_v_body.rows() == kNumStates);
+    Vector<double, kNumStates> p_v_body;
+    p_v_body.template head<kThreeFor3D>() = X_WB.translation();
+    p_v_body.template tail<kThreeFor3D>() = V_WBo_W.translational();
 
-    // Set body state in output vector.
-    q_body = ToVector<double>(X_WB);
-    v_body = V_WBo_W.get_coeffs();
-
-    return q_v_body;
+    return p_v_body;
   };
 
-  constexpr int kNumInputs = kSixSpatialDofs;
+  constexpr int kNumInputs = kThreeFor3D;
   const auto set_input_fn = [&](systems::Context<double>* context,
                                 const Eigen::Ref<const Eigen::VectorXd>& u) {
-    DRAKE_DEMAND(u.rows() == kNumInputs);
+    DRAKE_ASSERT(u.rows() == kNumInputs);
     std::vector<multibody::ExternallyAppliedSpatialForce<double>> forces{
         {
             .body_index = body.index(),
             .p_BoBq_B = Vector3<double>::Zero(),
-            .F_Bq_W = multibody::SpatialForce<double>(u),
+            .F_Bq_W = multibody::SpatialForce<double>(
+                Vector3<double>::Zero() /* tau */, u /* f */),
         },
     };
 
     plant.get_applied_spatial_force_input_port().FixValue(context, forces);
   };
 
-  const math::RigidTransform<double> X_WB_inital =
-      math::RigidTransform<double>::Identity();
+  const Vector3<double> p_WoBo_final(1., 1., 1.);
+  const Vector3<double>& p_WoBo_initial = X_WB_inital.translation();
 
-  const math::RigidTransform<double> X_WB_final(
-      math::RotationMatrix<double>::Identity(),
-      Vector3<double>(1., 1., 1.) /* p */);
+  Vector<double, kNumStates> q_v_initial;
+  q_v_initial.template head<kThreeFor3D>() = p_WoBo_initial;
+  q_v_initial.template tail<kThreeFor3D>() = Vector3<double>::Zero();
 
-  FloatingBodyStateVector<double> q_v_initial;
-  q_v_initial.template head<kNumFloatingBodyPositions>() =
-      ToVector<double>(X_WB_inital);
-  q_v_initial.template tail<kNumFloatingBodyVelocities>() =
-      FloatingBodySpatialVelocityVector<double>::Zero();
-
-  FloatingBodyStateVector<double> q_v_final;
-  q_v_final.template head<kNumFloatingBodyPositions>() =
-      ToVector<double>(X_WB_final);
-  q_v_final.template tail<kNumFloatingBodyVelocities>() =
-      FloatingBodySpatialVelocityVector<double>::Zero();
+  Vector<double, kNumStates> q_v_final;
+  q_v_final.template head<kThreeFor3D>() = p_WoBo_final;
+  q_v_final.template tail<kThreeFor3D>() = Vector3<double>::Zero();
 
   const int kNumSegments = 4;
   const int kNumTimeSamples = kNumSegments + 1;
@@ -262,7 +254,6 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
           (static_cast<double>(i) / static_cast<double>(kNumSegments));
       breaks[i] = kUpdateInterval * static_cast<double>(i);
 
-      // Obviously not going to be a valid seed, due to quaternion.
       x_samples[i] = q_v_initial * (1.0 - progress) + q_v_final * progress;
 
       Vector<double, kNumInputs> u_sample = Vector<double, kNumInputs>::Zero();
@@ -310,8 +301,8 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
     const Vector<double, kNumStates> state = states.value(start_time);
 
     std::cout << "@t=" << start_time << std::endl;
-    std::cout << "\tu=" << input.transpose() << std::endl;
     std::cout << "\tx=" << state.transpose() << std::endl;
+    if (i < N - 1) std::cout << "\tu=" << input.transpose() << std::endl;
   }
 
   // Replay the final trajectory in the logs.
