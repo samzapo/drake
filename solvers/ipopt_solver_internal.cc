@@ -690,8 +690,6 @@ void IpoptSolver_NLP::finalize_solution(SolverReturn status, Index n,
 void IpoptSolver_NLP::EvaluateCosts(Index n, const Number* x) {
   const Eigen::VectorXd xvec = MakeEigenVector(n, x);
 
-  problem_->EvalVisualizationCallbacks(xvec);
-
   AutoDiffVecXd ty(1);
   Eigen::VectorXd this_x;
 
@@ -728,6 +726,7 @@ void IpoptSolver_NLP::EvaluateCosts(Index n, const Number* x) {
 void IpoptSolver_NLP::EvaluateConstraints(Index n, const Number* x,
                                           bool eval_gradient) {
   const Eigen::VectorXd xvec = MakeEigenVector(n, x);
+  problem_->EvalVisualizationCallbacks(xvec);
 
   constraint_cache_->SetX(n, x);
   Number* result = constraint_cache_->result.data();
@@ -748,10 +747,8 @@ void IpoptSolver_NLP::EvaluateConstraints(Index n, const Number* x,
       const auto& c = problem_->generic_constraints()[i_gc];
       const auto& e = *c.evaluator();
       GradAndResult gr{
-          .grad = std::vector<Number>(eval_gradient
-                                          ? c.variables().rows() *
-                                                e.num_constraints()
-                                          : 0),
+          .grad = std::vector<Number>(
+              eval_gradient ? c.variables().rows() * e.num_constraints() : 0),
           .result = std::vector<Number>(e.num_constraints()),
       };
       const size_t num_vars =
@@ -775,9 +772,10 @@ void IpoptSolver_NLP::EvaluateConstraints(Index n, const Number* x,
       // creating and launching it first.
       // [deferred] the task is executed on the calling thread the first time
       // its result is requested (lazy evaluation).
-      grs[i_gc] = std::async(
-          e.may_evaluate_in_parallel() ? std::launch::async : std::launch::deferred,
-          work_fn, i_gc);
+      grs[i_gc] =
+          std::async(e.may_evaluate_in_parallel() ? std::launch::async
+                                                  : std::launch::deferred,
+                     work_fn, i_gc);
     }
 
     // Collect the computation results into the pooled constraint values as they

@@ -228,7 +228,7 @@ ParallelGenericDirectTranscription::ParallelGenericDirectTranscription(
     const double evaluation_time = static_cast<double>(i) * fixed_time_step;
     auto constraint = std::make_shared<DirectTranscriptionConstraint>(
         construct_simulator_fn, set_state_fn, set_input_fn, get_state_fn,
-        num_states, num_inputs, fixed_time_step, evaluation_time);
+        num_states, num_inputs, evaluation_time, fixed_time_step);
     prog().AddConstraint(constraint, {input(i), state(i), state(i + 1)});
   }
 }

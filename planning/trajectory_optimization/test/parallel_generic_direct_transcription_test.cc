@@ -221,7 +221,7 @@ GTEST_TEST(ParallelGenericParallelGenericDirectTranscriptionTest,
       math::RigidTransform<double>::Identity();
 
   const math::RigidTransform<double> X_WB_final(
-      math::RotationMatrix<double>::MakeYRotation(M_PI / 16),
+      math::RotationMatrix<double>::Identity(),
       Vector3<double>(1., 1., 1.) /* p */);
 
   FloatingBodyStateVector<double> q_v_initial;
